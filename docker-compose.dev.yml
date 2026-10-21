@@ -1,0 +1,16 @@
+# Overlay for development:  docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+# Runs `next dev` against a bind-mounted source tree so edits hot-reload.
+services:
+  app:
+    build:
+      context: .
+      target: builder
+    environment:
+      NODE_ENV: development
+    volumes:
+      - ./src:/app/src
+      - ./scripts:/app/scripts
+      - ./drizzle:/app/drizzle
+      - /app/node_modules
+      - /app/.next
+    command: sh -c "npx tsx scripts/migrate.ts && npx tsx scripts/seed.ts && npm run dev"

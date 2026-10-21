@@ -1,0 +1,74 @@
+name: prospecting
+
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: prospecting
+    ports:
+      # Host port 5433 on purpose: 5432 is very often already taken by a
+      # locally installed Postgres, and the resulting collision is confusing
+      # to diagnose — the container starts, but connections reach the wrong
+      # server. Inside the compose network the app still talks to db:5432.
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d prospecting"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  # Self-hosted metasearch, used by the pipeline to resolve company domains
+  # and find contact pages. It replaces SerpAPI, which is metered, and covers
+  # for DuckDuckGo's HTML endpoint blocking server-side callers.
+  #
+  # Under the `search` profile, so `docker compose up -d db` still starts only
+  # Postgres. Start it explicitly:
+  #   docker compose --profile search up -d searxng
+  searxng:
+    image: searxng/searxng:latest
+    profiles: ["search"]
+    restart: unless-stopped
+    ports:
+      - "8888:8080"
+    volumes:
+      - ./searxng:/etc/searxng:rw
+    environment:
+      # Must match however the app reaches it, or SearXNG rejects the request.
+      SEARXNG_BASE_URL: http://localhost:8888/
+      SEARXNG_SECRET: local-dev-not-a-production-secret
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- 'http://127.0.0.1:8080/search?q=test&format=json' >/dev/null 2>&1 || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 15s
+
+  app:
+    build:
+      context: .
+      target: runner
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@db:5432/prospecting
+      AUTH_MODE: ${AUTH_MODE:-dev}
+      BILLING_PROVIDER: ${BILLING_PROVIDER:-noop}
+      EMAIL_SENDER: ${EMAIL_SENDER:-log}
+      AI_PROVIDER: ${AI_PROVIDER:-anthropic}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      SERPAPI_API_KEY: ${SERPAPI_API_KEY:-}
+      CRON_SECRET: ${CRON_SECRET:-dev-cron-secret}
+      NODE_ENV: production
+    ports:
+      - "3000:3000"
+    command: sh -c "node scripts/migrate.js && node server.js"
+
+volumes:
+  pgdata:

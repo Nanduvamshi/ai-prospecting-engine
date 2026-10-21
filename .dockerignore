@@ -1,0 +1,12 @@
+node_modules
+.next
+.git
+.github
+infra
+drizzle/meta
+coverage
+*.md
+!README.md
+.env
+.env.local
+.env.*.local

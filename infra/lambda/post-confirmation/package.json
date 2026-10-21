@@ -1,0 +1,6 @@
+{
+  "name": "post-confirmation",
+  "type": "module",
+  "private": true,
+  "main": "index.mjs"
+}

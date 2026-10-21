@@ -1,0 +1,26 @@
+node_modules/
+.next/
+out/
+build/
+dist/
+*.tsbuildinfo
+next-env.d.ts
+
+.env
+.env.local
+.env.*.local
+.env.production
+
+coverage/
+.DS_Store
+*.log
+npm-debug.log*
+
+infra/cdk.out/
+infra/node_modules/
+
+# Local assistant config and working notes
+.claude/
+CLAUDE.md
+AGENTS.md
+HANDOFF.md

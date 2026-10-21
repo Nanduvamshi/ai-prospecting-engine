@@ -1,0 +1,111 @@
+name: Deploy
+
+# Manual only. Automatic checks on push live in ci.yml; deploying needs the
+# AWS_DEPLOY_ROLE_ARN secret and a bootstrapped account.
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment
+        required: true
+        default: dev
+        type: choice
+        options: [dev, prod]
+
+env:
+  AWS_REGION: ap-south-1
+
+jobs:
+  # Gate first. Pushing an image that fails typecheck wastes a deploy slot
+  # and leaves a broken tag in the registry.
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: prospecting
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready --health-interval 5s
+          --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run db:migrate
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/prospecting
+      # Exercises every repository against a real Postgres, which is the part
+      # a typecheck cannot tell you anything about.
+      - run: npm run verify:stores
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/prospecting
+          AUTH_MODE: dev
+
+  deploy:
+    needs: verify
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment || 'dev' }}
+    permissions:
+      id-token: write   # OIDC — no long-lived AWS keys in repository secrets
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: aws-actions/amazon-ecr-login@v2
+        id: ecr
+
+      - name: Build and push
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          ENVIRONMENT: ${{ inputs.environment || 'dev' }}
+        run: |
+          PREFIX=$([ "$ENVIRONMENT" = "prod" ] && echo prospecting || echo "prospecting-$ENVIRONMENT")
+          IMAGE="$REGISTRY/$PREFIX-app"
+          docker build --target runner -t "$IMAGE:$GITHUB_SHA" -t "$IMAGE:latest" .
+          docker push "$IMAGE:$GITHUB_SHA"
+          docker push "$IMAGE:latest"
+
+      - name: Deploy infrastructure
+        working-directory: infra
+        env:
+          ENVIRONMENT: ${{ inputs.environment || 'dev' }}
+        run: |
+          npm ci
+          # Pinning the tag to the commit means a rollback is a redeploy of an
+          # older sha, not a rebuild.
+          npx cdk deploy --all --require-approval never \
+            -c env="$ENVIRONMENT" \
+            -c imageTag="$GITHUB_SHA"
+
+      # Migrations are NOT run here. The database sits in private subnets and
+      # this runner cannot reach it; the container applies them at boot behind
+      # a Postgres advisory lock instead. See src/instrumentation.ts.
+
+      - name: Wait for health
+        env:
+          ENVIRONMENT: ${{ inputs.environment || 'dev' }}
+        run: |
+          PREFIX=$([ "$ENVIRONMENT" = "prod" ] && echo prospecting || echo "prospecting-$ENVIRONMENT")
+          URL=$(aws apprunner list-services \
+            --query "ServiceSummaryList[?ServiceName=='$PREFIX-app'].ServiceUrl" --output text)
+          echo "Checking https://$URL/api/health"
+          for i in $(seq 1 30); do
+            CODE=$(curl -s -o /dev/null -w '%{http_code}' "https://$URL/api/health" || true)
+            if [ "$CODE" = "200" ]; then echo "healthy"; exit 0; fi
+            echo "  attempt $i: $CODE"
+            sleep 10
+          done
+          echo "Service did not become healthy"
+          exit 1

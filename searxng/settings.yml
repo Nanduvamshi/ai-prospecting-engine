@@ -1,0 +1,59 @@
+# SearXNG configuration for local development.
+#
+# SearXNG is a metasearch engine: it forwards a query to Google, Bing, Brave
+# and others, merges the results and returns them. It exists here because the
+# pipeline needs *a* search engine — SerpAPI is metered and DuckDuckGo's HTML
+# endpoint blocks server-side callers outright — and this one has no quota.
+#
+# Two settings below are the whole reason this file exists rather than running
+# the stock image: JSON output is disabled by default, and the rate limiter
+# rejects automated callers. Both have to change for a programmatic client.
+
+use_default_settings: true
+
+general:
+  instance_name: 'prospecting-search'
+  # No usage-reporting from a local instance.
+  donation_url: false
+  contact_url: false
+
+search:
+  # The critical line. Without 'json' here SearXNG answers format=json with
+  # HTTP 403, which the client reports as "blocked" — indistinguishable from
+  # a bad key.
+  formats:
+    - html
+    - json
+  safe_search: 0
+  autocomplete: ''
+  default_lang: 'en'
+
+server:
+  # Local only, so this is not protecting anything reachable from outside;
+  # it still must be set or SearXNG refuses to start.
+  secret_key: 'local-dev-not-a-production-secret'
+  # The bot-detection limiter blocks non-browser clients, which is exactly
+  # what this deployment is. Off, because the only caller is this app.
+  limiter: false
+  image_proxy: false
+
+ui:
+  static_use_hash: true
+
+outgoing:
+  request_timeout: 10.0
+  max_request_timeout: 15.0
+  pool_connections: 100
+  pool_maxsize: 20
+
+engines:
+  # Google is the highest-value engine for this workload — the pipeline leans
+  # on site: operators and quoted phrases, which Google handles best.
+  - name: google
+    disabled: false
+  - name: duckduckgo
+    disabled: false
+  - name: bing
+    disabled: false
+  - name: brave
+    disabled: false
